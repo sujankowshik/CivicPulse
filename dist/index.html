@@ -8,10 +8,13 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <!-- TensorFlow.js & MobileNet (Client-side Machine Learning) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.0/dist/mobilenet.min.js"></script>
   <!-- Stylesheets -->
   <!-- Scripts -->
-  <script type="module" crossorigin src="/assets/index-tZ5UdMWp.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/index-DUWn_9OZ.css">
+  <script type="module" crossorigin src="/assets/index-BD6tHUdW.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-CvTwSG1E.css">
 </head>
 <body>
   <!-- Navigation Header -->
@@ -606,6 +609,7 @@
               </button>
             </div>
           </div>
+          <div id="ai-img-analysis-status" class="ai-analysis-feedback hidden"></div>
         </div>
 
         <!-- Field 5: Location Picker (Coordinates) -->
@@ -665,6 +669,8 @@
           <div class="error-msg"><span aria-hidden="true">❌</span> Address landmark is required (min 5 characters).</div>
         </div>
 
+        <!-- AI Duplicate Warnings Container -->
+        <div id="ai-duplicate-warning" class="ai-warning-box hidden"></div>
       </div>
 
       <div class="form-footer">
@@ -682,6 +688,8 @@
           <span class="badge" id="detail-category-badge">Category</span>
           <!-- Severity Indicator -->
           <span class="priority-glow-badge" id="detail-priority-badge">AI Score: --</span>
+          <!-- AI Resolution Verification Badge -->
+          <span class="ai-verification-badge hidden" id="detail-ai-verification">AI Verified</span>
         </div>
         <h2 id="detail-title">Issue Title Details</h2>
       </div>

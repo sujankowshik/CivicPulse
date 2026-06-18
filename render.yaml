@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: civicpulse
+    runtime: static
+    buildCommand: npm install && npm run build
+    publishPath: dist
+    headers:
+      - path: /*
+        name: Cache-Control
+        value: public, max-age=0, must-revalidate

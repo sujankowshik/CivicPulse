@@ -2301,3 +2301,86 @@ select:user-invalid + .error-msg {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+
+.ai-analysis-feedback {
+  margin-top: 0.6rem;
+  padding: 0.75rem 1rem;
+  background: rgba(99, 102, 241, 0.06);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: var(--border-radius-sm);
+  font-size: 0.85rem;
+  color: var(--color-accent);
+  line-height: 1.4;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  animation: fadeIn 0.3s ease-out forwards;
+}
+
+.ai-analysis-feedback .prediction-item {
+  display: flex;
+  justify-content: space-between;
+  color: var(--color-text-secondary);
+  font-family: monospace;
+  font-size: 0.8rem;
+}
+
+.ai-analysis-feedback .prediction-label {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+/* AI Duplicate Warning Box */
+.ai-warning-box {
+  margin-top: 0.75rem;
+  padding: 0.85rem 1.15rem;
+  background: rgba(239, 68, 68, 0.05);
+  border: 1px dashed rgba(239, 68, 68, 0.25);
+  border-radius: var(--border-radius-sm);
+  font-size: 0.85rem;
+  color: #fca5a5;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  animation: fadeIn 0.3s ease-out forwards;
+}
+
+.ai-warning-box strong {
+  color: #ef4444;
+}
+
+.ai-warning-box .btn-warning-action {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.75rem;
+  border-radius: 4px;
+  cursor: pointer;
+  width: fit-content;
+  transition: all 0.2s ease;
+}
+
+.ai-warning-box .btn-warning-action:hover {
+  background: #ef4444;
+  color: #ffffff;
+  border-color: #ef4444;
+}
+
+/* AI Resolution Verification Badge */
+.ai-verification-badge {
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  color: #34d399;
+  font-weight: 600;
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--border-radius-xs);
+  font-size: 0.75rem;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.15);
+  animation: pulse 2s infinite;
+}
