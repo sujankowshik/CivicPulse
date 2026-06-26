@@ -1,3 +1,28 @@
+// --- GLOBAL ERROR HANDLERS ---
+window.addEventListener('error', (event) => {
+  console.error("Unhandled error caught:", event.error);
+  try {
+    const errorMsg = event.message || (event.error && event.error.message) || 'Unknown error';
+    if (typeof showToast === 'function') {
+      showToast(`JS Error: ${errorMsg}`, 'error');
+    }
+  } catch (e) {}
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+  console.error("Unhandled promise rejection caught:", event.reason);
+  try {
+    const reasonMsg = (event.reason && (event.reason.message || event.reason.msg || event.reason)) || 'Unknown promise rejection';
+    if (typeof showToast === 'function') {
+      showToast(`Promise Error: ${reasonMsg}`, 'error');
+    }
+  } catch (e) {}
+});
+
+const API_URL_PREFIX = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.protocol === 'file:')
+  ? 'http://localhost:5001'
+  : (import.meta.env.VITE_API_URL || '');
+
 // --- GLOBAL ML MODEL ---
 let imageClassifierModel = null;
 
@@ -372,97 +397,38 @@ const DEFAULT_ISSUES = [
 // --- APP STATE MANAGEMENT ---
 class AppState {
   constructor() {
-    let loadedIssues = JSON.parse(localStorage.getItem('civic_issues')) || DEFAULT_ISSUES;
-    this.issues = loadedIssues.map(issue => {
-      if (!issue.upvotedUsers || !Array.isArray(issue.upvotedUsers)) {
-        issue.upvotedUsers = [];
-      }
-      if (issue.priorityScore === undefined) {
-        issue.priorityScore = 40;
-      }
-      if (issue.prioritySeverity === undefined) {
-        issue.prioritySeverity = 'medium';
-      }
-      if (issue.assignee === undefined) {
-        issue.assignee = 'unassigned';
-      }
-      if (issue.comments === undefined) {
-        issue.comments = [];
-      }
-      if (issue.timeline === undefined) {
-        issue.timeline = [];
-      }
-      if (issue.locationText === undefined) {
-        // Fallback placeholder address from coordinates
-        issue.locationText = `Block ${Math.floor(issue.coordX/30) + 1}, Sector ${Math.floor(issue.coordY/20) + 1}`;
-      }
-      // Migrate old format images to offline base64
-      if (issue.photo && (issue.photo.startsWith('data:image/svg+xml;utf8') || !issue.photo.includes(';base64,'))) {
-        issue.photo = getMockImageSVG(issue.category, false);
-      }
-      if (issue.resolvedPhoto && (issue.resolvedPhoto.startsWith('data:image/svg+xml;utf8') || !issue.resolvedPhoto.includes(';base64,'))) {
-        issue.resolvedPhoto = getMockImageSVG(issue.category, true);
-      }
-      return issue;
-    });
-
-    let loadedUsers = JSON.parse(localStorage.getItem('civic_users')) || DEFAULT_USERS;
-    this.users = loadedUsers.map(user => {
-      if (user.karma === undefined) user.karma = 0;
-      if (user.badges === undefined) user.badges = [];
-      // Migrate older external avatars to local offline base64
-      if (user.avatar && (user.avatar.includes('dicebear.com') || !user.avatar.includes(';base64,'))) {
-        user.avatar = getMockAvatarSVG(user.name || 'Citizen');
-      }
-      return user;
-    });
-
-    this.currentUser = JSON.parse(localStorage.getItem('civic_current_user')) || null;
-    if (this.currentUser && this.currentUser.avatar && (this.currentUser.avatar.includes('dicebear.com') || !this.currentUser.avatar.includes(';base64,'))) {
-      this.currentUser.avatar = getMockAvatarSVG(this.currentUser.name || 'Citizen');
-      localStorage.setItem('civic_current_user', JSON.stringify(this.currentUser));
-    }
-    
-    this.userRole = this.currentUser ? this.currentUser.role : 'guest';
+    this.issues = [];
+    this.users = [];
+    this.currentUser = null;
+    this.userRole = 'guest';
     this.activeView = 'dashboard';
     this.selectedIssueId = null;
     this.activeProfileTab = 'my-reports';
     this.adminSortCol = 'id';
     this.adminSortAsc = true;
-
-    // Save defaults to storage
-    this.saveIssues();
-    this.saveUsers();
   }
 
-  saveIssues() { localStorage.setItem('civic_issues', JSON.stringify(this.issues)); }
-  saveUsers() { localStorage.setItem('civic_users', JSON.stringify(this.users)); }
-  saveSession() { localStorage.setItem('civic_current_user', JSON.stringify(this.currentUser)); }
+  saveIssues() {}
+  saveUsers() {}
+  saveSession() {}
 
   setCurrentUser(user) {
     this.currentUser = user;
     this.userRole = user ? user.role : 'guest';
-    this.saveSession();
   }
 
-  updateUserInList(user) {
-    const idx = this.users.findIndex(u => u.email === user.email);
-    if (idx !== -1) {
-      this.users[idx] = user;
-      this.saveUsers();
-    }
-  }
+  updateUserInList(user) {}
 
   addIssue(issue) {
+    issue.id = issue._id;
     this.issues.unshift(issue);
-    this.saveIssues();
   }
 
   updateIssue(updated) {
+    updated.id = updated._id;
     const idx = this.issues.findIndex(i => i.id === updated.id);
     if (idx !== -1) {
       this.issues[idx] = updated;
-      this.saveIssues();
     }
   }
 
@@ -829,60 +795,93 @@ function initProfileTabs() {
   });
 }
 
-function awardKarma(points, actionLabel) {
-  if (!state.currentUser) return;
-  
-  const user = state.currentUser;
-  user.karma = (user.karma || 0) + points;
-
-  // Trigger Badge Checks
-  const activeBadges = user.badges || [];
-  
-  // 1. Pothole Patrol (reported a roads issue)
-  const userReports = state.issues.filter(i => i.authorEmail === user.email);
-  if (userReports.some(i => i.category === 'roads') && !activeBadges.includes('pothole-patrol')) {
-    activeBadges.push('pothole-patrol');
-    showToast(`Badge Unlocked: Pothole Patrol! 🕳️`, 'success');
+async function loadServerData() {
+  const token = localStorage.getItem('civic_jwt');
+  if (token) {
+    try {
+      const res = await fetch(`${API_URL_PREFIX}/api/auth/profile`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const user = await res.json();
+        state.currentUser = {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          avatar: user.avatar,
+          karma: user.karma,
+          badges: user.badges
+        };
+        state.userRole = user.role;
+      } else {
+        localStorage.removeItem('civic_jwt');
+        state.currentUser = null;
+        state.userRole = 'guest';
+      }
+    } catch (e) {
+      console.error("Failed to load user profile:", e);
+    }
+  } else {
+    state.currentUser = null;
+    state.userRole = 'guest';
   }
 
-  // 2. Green Citizen (reported a waste issue)
-  if (userReports.some(i => i.category === 'waste') && !activeBadges.includes('green-citizen')) {
-    activeBadges.push('green-citizen');
-    showToast(`Badge Unlocked: Green Citizen! 🌱`, 'success');
-  }
-
-  // 3. Eagle Eye (reported >= 3 issues)
-  if (userReports.length >= 3 && !activeBadges.includes('eagle-eye')) {
-    activeBadges.push('eagle-eye');
-    showToast(`Badge Unlocked: Eagle Eye! 🦅`, 'success');
-  }
-
-  // 4. Voice of City (posted >= 2 comments)
-  let userCommentCount = 0;
-  state.issues.forEach(iss => {
-    if (iss.comments) {
-      iss.comments.forEach(c => {
-        if (c.author.includes(user.name)) userCommentCount++;
+  try {
+    const res = await fetch(`${API_URL_PREFIX}/api/issues`);
+    if (res.ok) {
+      const issues = await res.json();
+      state.issues = issues.map(iss => {
+        iss.id = iss._id;
+        iss.date = iss.createdAt ? iss.createdAt.split('T')[0] : new Date().toISOString().split('T')[0];
+        return iss;
       });
     }
-  });
-  if (userCommentCount >= 2 && !activeBadges.includes('voice-of-city')) {
-    activeBadges.push('voice-of-city');
-    showToast(`Badge Unlocked: Voice of City! 💬`, 'success');
+  } catch (e) {
+    console.error("Failed to load issues:", e);
   }
-
-  // 5. Civic Leader (karma >= 150)
-  if (user.karma >= 150 && !activeBadges.includes('civic-leader')) {
-    activeBadges.push('civic-leader');
-    showToast(`Badge Unlocked: Civic Leader! 👑`, 'success');
-  }
-
-  user.badges = activeBadges;
-  state.setCurrentUser(user);
-  state.updateUserInList(user);
-  
-  showToast(`+${points} Civic Karma: ${actionLabel}!`, 'success');
 }
+
+async function awardKarma(points, actionLabel) {
+  if (!state.currentUser) return;
+  const token = localStorage.getItem('civic_jwt');
+  if (!token) return;
+
+  try {
+    const res = await fetch(`${API_URL_PREFIX}/api/auth/karma`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({ points, reason: actionLabel })
+    });
+    if (res.ok) {
+      const user = await res.json();
+      state.currentUser = user;
+      state.userRole = user.role;
+      
+      const activeBadges = user.badges || [];
+      const userReports = state.issues.filter(i => i.authorEmail === user.email);
+      
+      if (userReports.some(i => i.category === 'roads') && !activeBadges.includes('pothole-patrol')) {
+        showToast(`Badge Unlocked: Pothole Patrol! 🕳️`, 'success');
+      }
+      if (userReports.some(i => i.category === 'waste') && !activeBadges.includes('green-citizen')) {
+        showToast(`Badge Unlocked: Green Citizen! 🌱`, 'success');
+      }
+      if (userReports.length >= 3 && !activeBadges.includes('eagle-eye')) {
+        showToast(`Badge Unlocked: Eagle Eye! 🦅`, 'success');
+      }
+
+      showToast(`+${points} Civic Karma: ${actionLabel}!`, 'success');
+      if (state.activeView === 'profile') renderProfile();
+    }
+  } catch (e) {
+    console.error("Failed to update karma on server:", e);
+  }
+}
+
 
 // --- 5. ADMIN CONTROL PANEL VIEW (advanced grids) ---
 function renderAdminPanel() {
@@ -1003,6 +1002,8 @@ window.openDetailDialog = function(issueId) {
 
   const auditBadge = document.getElementById('detail-ai-verification');
 
+  const statusBox = document.getElementById('detail-ai-verification-status-box');
+
   if (issue.status === 'resolved' && issue.resolvedPhoto) {
     slider.classList.remove('hidden');
     imgBox.classList.add('hidden');
@@ -1019,6 +1020,25 @@ window.openDetailDialog = function(issueId) {
     } else {
       imgBox.classList.add('hidden');
       singleImg.src = '';
+    }
+    if (statusBox) {
+      if (issue.status === 'resolved') {
+        statusBox.className = 'ai-verification-status-box success';
+        statusBox.innerHTML = `
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          <span>AI Verified: Resolution Confirmed (System Audit) ✓</span>
+        `;
+      } else {
+        statusBox.className = 'ai-verification-status-box pending';
+        statusBox.innerHTML = `
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          <span>Awaiting Resolution Proof: Verification photo has not been uploaded by authorities.</span>
+        `;
+      }
     }
   }
 
@@ -1190,34 +1210,38 @@ function setupCommentsListener() {
     const commentText = textarea.value.trim();
     if (!commentText || !state.selectedIssueId) return;
 
-    const issue = state.getIssueById(state.selectedIssueId);
-    if (!issue) return;
+    const token = localStorage.getItem('civic_jwt');
+    if (!token) return;
 
-    if (!issue.comments) issue.comments = [];
+    fetch(`${API_URL_PREFIX}/api/issues/${state.selectedIssueId}/comments`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({ text: commentText })
+    })
+    .then(async (res) => {
+      if (res.ok) {
+        const updatedIssue = await res.json();
+        state.updateIssue(updatedIssue);
+        textarea.value = '';
+        renderComments(updatedIssue);
 
-    const now = new Date();
-    const dateStr = now.toISOString().split('T')[0] + ' ' + now.toTimeString().split(' ')[0].substring(0, 5);
+        // Sync profile karma & badges
+        await loadServerData();
+        showToast('+15 Civic Karma: Commented on ticket!', 'success');
 
-    const newComment = {
-      author: `${state.currentUser.name} (${state.userRole === 'admin' ? 'Staff' : 'Citizen'})`,
-      role: state.userRole,
-      text: commentText,
-      date: dateStr
-    };
-
-    issue.comments.push(newComment);
-    state.updateIssue(issue);
-    textarea.value = '';
-
-    renderComments(issue);
-    
-    // Gamification points boost for Citizen comments
-    if (state.userRole === 'citizen') {
-      awardKarma(15, 'Commented on ticket');
-    }
-
-    if (state.activeView === 'feed') renderFeed();
-    if (state.activeView === 'profile') renderProfile();
+        if (state.activeView === 'feed') renderFeed();
+        if (state.activeView === 'profile') renderProfile();
+      } else {
+        showToast('Failed to post comment.', 'error');
+      }
+    })
+    .catch((err) => {
+      console.error(err);
+      showToast('Connection error to server.', 'error');
+    });
   });
 }
 
@@ -1235,39 +1259,46 @@ function setupUpvoteListener() {
     const issue = state.getIssueById(state.selectedIssueId);
     if (!issue) return;
 
-    if (!issue.upvotedUsers) issue.upvotedUsers = [];
+    const token = localStorage.getItem('civic_jwt');
+    if (!token) return;
 
-    const userEmail = state.currentUser.email;
-    const userIdx = issue.upvotedUsers.indexOf(userEmail);
-    
-    if (userIdx === -1) {
-      // Upvote
-      issue.upvotes++;
-      issue.upvotedUsers.push(userEmail);
-      upvoteBtn.classList.add('upvoted');
-      upvoteBtn.setAttribute('aria-pressed', 'true');
-      
-      // Update Priority Score slightly based on upvotes (+1 point per upvote up to +15)
-      const baseScore = issue.priorityScore;
-      issue.priorityScore = Math.min(100, baseScore + 1);
+    fetch(`${API_URL_PREFIX}/api/issues/${state.selectedIssueId}/upvote`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    })
+    .then(async (res) => {
+      if (res.ok) {
+        const updatedIssue = await res.json();
+        state.updateIssue(updatedIssue);
 
-      awardKarma(10, 'Upvoted ticket');
-    } else {
-      // Unvote
-      issue.upvotes--;
-      issue.upvotedUsers.splice(userIdx, 1);
-      upvoteBtn.classList.remove('upvoted');
-      upvoteBtn.setAttribute('aria-pressed', 'false');
-      issue.priorityScore = Math.max(1, issue.priorityScore - 1);
-    }
+        const hasUpvoted = state.currentUser && updatedIssue.upvotedUsers && updatedIssue.upvotedUsers.includes(state.currentUser.email);
+        if (hasUpvoted) {
+          upvoteBtn.classList.add('upvoted');
+          upvoteBtn.setAttribute('aria-pressed', 'true');
+          showToast('+10 Civic Karma: Upvoted ticket!', 'success');
+        } else {
+          upvoteBtn.classList.remove('upvoted');
+          upvoteBtn.setAttribute('aria-pressed', 'false');
+          showToast('-10 Civic Karma: Removed upvote', 'warning');
+        }
 
-    state.updateIssue(issue);
-    document.getElementById('detail-upvotes').textContent = issue.upvotes;
+        document.getElementById('detail-upvotes').textContent = updatedIssue.upvotes;
 
-    // Refresh view data
-    if (state.activeView === 'feed') renderFeed();
-    if (state.activeView === 'dashboard') renderDashboard();
-    if (state.activeView === 'profile') renderProfile();
+        await loadServerData();
+
+        if (state.activeView === 'feed') renderFeed();
+        if (state.activeView === 'dashboard') renderDashboard();
+        if (state.activeView === 'profile') renderProfile();
+      } else {
+        showToast('Failed to upvote.', 'error');
+      }
+    })
+    .catch((err) => {
+      console.error(err);
+      showToast('Connection error to server.', 'error');
+    });
   });
 }
 
@@ -1284,6 +1315,7 @@ function setupAdminPhotoUpload() {
 
   dropZone.addEventListener('click', (e) => {
     if (e.target.closest('#btn-remove-admin-photo')) return;
+    if (e.target === fileInput) return;
     fileInput.click();
   });
 
@@ -1358,86 +1390,49 @@ function setupAdminActionsListener() {
     const newStatus = selectStatus.value;
     const newAssignee = selectAssignee.value;
 
-    let hasChange = false;
-
-    // 1. Assignee Change
-    if (issue.assignee !== newAssignee) {
-      issue.assignee = newAssignee;
-      hasChange = true;
-
-      const now = new Date();
-      const dateFormatted = now.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
-      const deptName = newAssignee === 'unassigned' ? 'Unassigned' : CATEGORIES[newAssignee].label;
-
-      const assignTimelineItem = {
-        status: issue.status,
-        title: 'Department Assigned',
-        note: `Ticket route assigned to ${deptName}.`,
-        date: dateFormatted
-      };
-
-      if (!issue.timeline) issue.timeline = [];
-      issue.timeline.push(assignTimelineItem);
+    if (newStatus === 'resolved' && !adminPhotoData) {
+      showToast('Please upload a resolved state photo proof.', 'error');
+      return;
     }
 
-    // 2. Status Change
-    if (issue.status !== newStatus) {
-      // Validate photo is uploaded if marked resolved
-      if (newStatus === 'resolved' && !adminPhotoData) {
-        showToast('Please upload a resolved state photo proof.', 'error');
-        return;
-      }
+    const token = localStorage.getItem('civic_jwt');
+    if (!token) return;
 
-      const oldStatus = issue.status;
-      issue.status = newStatus;
-      hasChange = true;
-
-      const now = new Date();
-      const dateFormatted = now.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
-      const timeFormatted = now.toTimeString().split(' ')[0].substring(0, 5);
-
-      let statusTitle = 'Status Updated';
-      let statusNote = `Ticket status changed from ${STATUSES[oldStatus].label} to ${STATUSES[newStatus].label}.`;
-
-      if (newStatus === 'progress') {
-        statusTitle = 'Work Scheduled';
-        statusNote = 'City planners dispatched workers for resolution task.';
-      } else if (newStatus === 'resolved') {
-        statusTitle = 'Issue Resolved';
-        statusNote = 'Field repair work verified. Resolution complete.';
-        issue.resolvedPhoto = adminPhotoData;
-      }
-
-      const timelineItem = {
+    fetch(`${API_URL_PREFIX}/api/issues/${state.selectedIssueId}/status`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
         status: newStatus,
-        title: statusTitle,
-        note: statusNote,
-        date: dateFormatted
-      };
+        assignee: newAssignee,
+        resolvedPhoto: newStatus === 'resolved' ? adminPhotoData : undefined
+      })
+    })
+    .then(async (res) => {
+      if (res.ok) {
+        const updatedIssue = await res.json();
+        state.updateIssue(updatedIssue);
 
-      if (!issue.timeline) issue.timeline = [];
-      issue.timeline.push(timelineItem);
+        showToast('Operations ticket updated successfully.', 'success');
+        resetAdminPhotoUpload();
+        document.getElementById('detail-dialog').close();
+        
+        await loadServerData();
 
-      // Add system official comment
-      const systemComment = {
-        author: 'City Administration (Staff)',
-        role: 'admin',
-        text: `Official Status Update: Marked as [${STATUSES[newStatus].label}]. ${statusNote}`,
-        date: now.toISOString().split('T')[0] + ' ' + timeFormatted
-      };
-      if (!issue.comments) issue.comments = [];
-      issue.comments.push(systemComment);
-    }
-
-    if (hasChange) {
-      state.updateIssue(issue);
-      showToast('Operations ticket updated successfully.', 'success');
-      resetAdminPhotoUpload();
-      
-      // Close detail modal and refresh current views
-      document.getElementById('detail-dialog').close();
-      renderView(state.activeView);
-    }
+        renderDashboard();
+        renderFeed();
+        renderMap();
+        renderAdminPanel();
+      } else {
+        showToast('Failed to update operations ticket.', 'error');
+      }
+    })
+    .catch((err) => {
+      console.error(err);
+      showToast('Connection error to server.', 'error');
+    });
   });
 }
 
@@ -1629,6 +1624,7 @@ function setupPhotoUpload() {
 
   dropZone.addEventListener('click', (e) => {
     if (e.target.closest('#btn-remove-photo')) return;
+    if (e.target === fileInput) return;
     fileInput.click();
   });
 
@@ -1983,16 +1979,33 @@ window.viewExistingDuplicate = function(issueId) {
 // --- AI RESOLUTION VISUAL COMPARISON AUDITOR ---
 async function auditResolutionVisuals(issue) {
   const auditBadge = document.getElementById('detail-ai-verification');
-  if (!auditBadge) return;
+  const statusBox = document.getElementById('detail-ai-verification-status-box');
   
-  auditBadge.className = "ai-verification-badge";
-  auditBadge.textContent = "AI Auditing Resolution...";
-  auditBadge.classList.remove('hidden');
+  if (auditBadge) {
+    auditBadge.className = "ai-verification-badge";
+    auditBadge.textContent = "AI Auditing Resolution...";
+    auditBadge.classList.remove('hidden');
+  }
+  
+  if (statusBox) {
+    statusBox.className = "ai-verification-status-box pending";
+    statusBox.innerHTML = `
+      <span class="spinner-border" style="display: inline-block; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin 0.75s linear infinite; vertical-align: middle; margin-right: 4px;"></span>
+      <span>AI Triage is auditing resolution photos...</span>
+    `;
+  }
   
   try {
     if (!imageClassifierModel) {
       setTimeout(() => {
-        auditBadge.innerHTML = `🛡️ AI Verified (System Audit)`;
+        if (auditBadge) auditBadge.innerHTML = `🛡️ AI Verified (System Audit)`;
+        if (statusBox) {
+          statusBox.className = "ai-verification-status-box success";
+          statusBox.innerHTML = `
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+            <span>AI Verified: Resolution Confirmed ✓</span>
+          `;
+        }
       }, 600);
       return;
     }
@@ -2018,16 +2031,56 @@ async function auditResolutionVisuals(issue) {
     const beforeHasHazard = hazardKeywords.some(kw => beforeFirst.includes(kw));
     const afterHasHazard = hazardKeywords.some(kw => afterFirst.includes(kw));
     
+    let statusHTML = '';
+    let isSuccess = false;
+    let badgeText = '';
+
     if (beforeHasHazard && !afterHasHazard) {
-      auditBadge.innerHTML = `🛡️ AI Verified: Resolution Verified (Hazard Cleared)`;
+      badgeText = `🛡️ AI Verified: Resolution Verified (Hazard Cleared)`;
+      isSuccess = true;
     } else if (beforeFirst !== afterFirst) {
-      auditBadge.innerHTML = `🛡️ AI Verified: Resolution Verified (Visual Cleanup)`;
+      badgeText = `🛡️ AI Verified: Resolution Verified (Visual Cleanup)`;
+      isSuccess = true;
     } else {
-      auditBadge.innerHTML = `⚠️ AI Audit: Low Visual Variance Detected`;
+      badgeText = `⚠️ AI Audit: Low Visual Variance Detected`;
+      isSuccess = false;
+    }
+
+    if (auditBadge) auditBadge.innerHTML = badgeText;
+    
+    if (statusBox) {
+      if (isSuccess) {
+        statusBox.className = "ai-verification-status-box success";
+        statusBox.innerHTML = `
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          <span>AI Verified: Resolution Confirmed ✓</span>
+        `;
+      } else {
+        statusBox.className = "ai-verification-status-box warning";
+        statusBox.innerHTML = `
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          <span>AI Audit: Low Visual Variance Detected between photos</span>
+        `;
+      }
     }
   } catch (err) {
     console.error("AI visual audit failed:", err);
-    auditBadge.innerHTML = `⚠️ AI Audit Failed`;
+    if (auditBadge) auditBadge.innerHTML = `⚠️ AI Audit Failed`;
+    if (statusBox) {
+      statusBox.className = "ai-verification-status-box warning";
+      statusBox.innerHTML = `
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="12" y1="8" x2="12" y2="12"/>
+          <line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        <span>AI Audit Failed: Image processing error</span>
+      `;
+    }
   }
 }
 
@@ -2072,57 +2125,54 @@ function setupReportSubmission() {
       }
     });
 
-    if (hasErrors) return;
-
     const title = document.getElementById('issue-title').value.trim();
     const category = document.getElementById('issue-category').value;
     const description = document.getElementById('issue-description').value.trim();
     const locationText = document.getElementById('issue-location-text').value.trim();
-    
-    const now = new Date();
-    const dateStr = now.toISOString().split('T')[0];
-    const dateFormatted = now.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
 
-    // Run AI triage priorities
-    const triage = runAIEngineTriage(title, description, category);
+    const token = localStorage.getItem('civic_jwt');
+    if (!token) return;
 
-    const newIssue = {
-      id: 'issue_' + now.getTime(),
-      title: title,
-      description: description,
-      category: category,
-      status: 'pending',
-      photo: selectedPhotoData || getMockImageSVG(category, false),
-      coordX: parseFloat(coordX),
-      coordY: parseFloat(coordY),
-      locationText: locationText || `Block ${Math.floor(parseFloat(coordX)/30) + 1}, Sector ${Math.floor(parseFloat(coordY)/20) + 1}`,
-      upvotes: 1,
-      upvotedUsers: [state.currentUser.email],
-      date: dateStr,
-      authorName: state.currentUser.name,
-      authorEmail: state.currentUser.email,
-      priorityScore: triage.score,
-      prioritySeverity: triage.severity,
-      assignee: 'unassigned',
-      comments: [],
-      timeline: [
-        {
-          status: 'pending',
-          title: 'Reported',
-          note: `Issue submitted. AI triage assessment complete: Severity rated as ${triage.severity.toUpperCase()} (${triage.score}/100).`,
-          date: dateFormatted
-        }
-      ]
-    };
+    fetch(`${API_URL_PREFIX}/api/issues`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        title,
+        category,
+        description,
+        locationText,
+        photo: selectedPhotoData || getMockImageSVG(category, false),
+        coordX: parseFloat(coordX),
+        coordY: parseFloat(coordY)
+      })
+    })
+    .then(async (res) => {
+      if (res.ok) {
+        showToast('Issue submitted successfully!', 'success');
+        await loadServerData();
+        dialog.close();
+        resetReportForm();
 
-    state.addIssue(newIssue);
-    dialog.close();
-    resetReportForm();
+        // Reward Karma points for reporting (+50)
+        await awardKarma(50, 'Submitted new ticket report');
 
-    // Reward Karma points for reporting (+50)
-    awardKarma(50, 'Submitted new ticket report');
+        renderDashboard();
+        renderFeed();
+        renderMap();
 
-    switchView('feed');
+        switchView('feed');
+      } else {
+        const data = await res.json();
+        showToast(data.msg || 'Failed to submit issue.', 'error');
+      }
+    })
+    .catch((err) => {
+      console.error(err);
+      showToast('Connection error to server.', 'error');
+    });
   });
 
   form.addEventListener('input', (e) => {
@@ -2167,6 +2217,11 @@ function setupAuthentication() {
   tabRegister.addEventListener('click', () => toggleAuthTabs('register'));
 
   function toggleAuthTabs(mode) {
+    const loginErrorBanner = document.getElementById('login-error-banner');
+    const registerErrorBanner = document.getElementById('register-error-banner');
+    if (loginErrorBanner) loginErrorBanner.classList.add('hidden');
+    if (registerErrorBanner) registerErrorBanner.classList.add('hidden');
+
     if (mode === 'login') {
       tabLogin.classList.add('active');
       tabRegister.classList.remove('active');
@@ -2183,6 +2238,9 @@ function setupAuthentication() {
   // 1. SIGN IN SUBMIT
   loginForm.addEventListener('submit', (e) => {
     e.preventDefault();
+    const loginErrorBanner = document.getElementById('login-error-banner');
+    if (loginErrorBanner) loginErrorBanner.classList.add('hidden');
+
     const email = document.getElementById('login-email').value.trim();
     const pass = document.getElementById('login-password').value;
 
@@ -2200,33 +2258,65 @@ function setupAuthentication() {
 
     if (hasError) return;
 
-    // Search user accounts
-    const user = state.users.find(u => u.email === email && u.password === pass);
-    if (!user) {
-      showToast('Invalid email credentials or password.', 'error');
-      return;
-    }
+    fetch(`${API_URL_PREFIX}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password: pass })
+    })
+    .then(async (res) => {
+      let data;
+      try {
+        data = await res.json();
+      } catch (e) {
+        data = { msg: 'Server error' };
+      }
 
-    state.setCurrentUser(user);
-    showToast(`Welcome back, ${user.name}!`, 'success');
-    dialog.close();
-    loginForm.reset();
-    
-    // Sync UI Header session state and redraw views
-    syncSessionUI();
-    
-    // Switch to dashboard view
-    switchView('dashboard');
+      if (res.ok) {
+        localStorage.setItem('civic_jwt', data.token);
+
+        state.currentUser = data.user;
+        state.userRole = data.user.role;
+
+        showToast(`Welcome back, ${data.user.name}!`, 'success');
+        dialog.close();
+        loginForm.reset();
+
+        syncSessionUI();
+        await loadServerData();
+
+        renderDashboard();
+        renderFeed();
+        renderMap();
+
+        switchView('dashboard');
+      } else {
+        const loginErrorBanner = document.getElementById('login-error-banner');
+        if (loginErrorBanner) {
+          loginErrorBanner.textContent = `❌ ${data.msg || 'Invalid email credentials or password.'}`;
+          loginErrorBanner.classList.remove('hidden');
+        }
+        showToast(data.msg || 'Invalid email credentials or password.', 'error');
+      }
+    })
+    .catch((err) => {
+      console.error(err);
+      showToast('Connection error to server.', 'error');
+    });
   });
 
   // 2. REGISTER SUBMIT
   regForm.addEventListener('submit', (e) => {
     e.preventDefault();
+    const registerErrorBanner = document.getElementById('register-error-banner');
+    if (registerErrorBanner) registerErrorBanner.classList.add('hidden');
+
     const name = document.getElementById('reg-name').value.trim();
     const email = document.getElementById('reg-email').value.trim();
     const pass = document.getElementById('reg-password').value;
-    const avatarVal = regForm.querySelector('input[name="reg-avatar"]:checked').value;
     
+    const avatarChecked = regForm.querySelector('input[name="reg-avatar"]:checked');
+    const avatarVal = avatarChecked ? avatarChecked.value : 'avatar-1';
+
     let hasError = false;
     regForm.querySelectorAll('input[required]').forEach(inp => {
       const f = inp.closest('.form-field');
@@ -2240,47 +2330,69 @@ function setupAuthentication() {
 
     if (hasError) return;
 
-    // Check email availability
-    const exists = state.users.some(u => u.email === email);
-    if (exists) {
-      showToast('Email address already registered.', 'error');
-      return;
-    }
-
-    // Avatar seeding URLs
     let avatarUrl = getMockAvatarSVG('Felix');
     if (avatarVal === 'avatar-2') avatarUrl = getMockAvatarSVG('Aria');
     if (avatarVal === 'avatar-3') avatarUrl = getMockAvatarSVG('Jack');
     if (avatarVal === 'avatar-4') avatarUrl = getMockAvatarSVG('Luna');
     if (avatarVal === 'avatar-5') avatarUrl = getMockAvatarSVG('Oliver');
 
-    const newUser = {
-      name: name,
-      email: email,
-      password: pass,
-      role: 'citizen',
-      avatar: avatarUrl,
-      karma: 0,
-      badges: []
-    };
+    fetch(`${API_URL_PREFIX}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, email, password: pass, avatar: avatarUrl })
+    })
+    .then(async (res) => {
+      let data;
+      try {
+        data = await res.json();
+      } catch (e) {
+        data = { msg: 'Server error' };
+      }
 
-    state.users.push(newUser);
-    state.saveUsers();
-    
-    state.setCurrentUser(newUser);
-    showToast(`Account created. Welcome to CivicPulse, ${name}!`, 'success');
-    dialog.close();
-    regForm.reset();
+      if (res.ok) {
+        localStorage.setItem('civic_jwt', data.token);
 
-    syncSessionUI();
-    switchView('dashboard');
+        state.currentUser = data.user;
+        state.userRole = data.user.role;
+
+        showToast(`Account created. Welcome to CivicPulse, ${name}!`, 'success');
+        dialog.close();
+        regForm.reset();
+
+        syncSessionUI();
+        await loadServerData();
+
+        renderDashboard();
+        renderFeed();
+        renderMap();
+
+        switchView('dashboard');
+      } else {
+        const registerErrorBanner = document.getElementById('register-error-banner');
+        if (registerErrorBanner) {
+          registerErrorBanner.textContent = `❌ ${data.msg || 'Failed to create account.'}`;
+          registerErrorBanner.classList.remove('hidden');
+        }
+        showToast(data.msg || 'Failed to create account.', 'error');
+      }
+    })
+    .catch((err) => {
+      console.error(err);
+      showToast('Connection error to server.', 'error');
+    });
   });
 
   // Sign out triggers
   document.getElementById('btn-sign-out').addEventListener('click', () => {
-    state.setCurrentUser(null);
+    localStorage.removeItem('civic_jwt');
+    state.currentUser = null;
+    state.userRole = 'guest';
     showToast('Signed out of session successfully.', 'success');
     syncSessionUI();
+    
+    renderDashboard();
+    renderFeed();
+    renderMap();
     switchView('dashboard');
   });
 
@@ -2326,6 +2438,7 @@ function syncSessionUI() {
 
 // --- UTILITIES ---
 function formatDateString(dateStr) {
+  if (!dateStr || typeof dateStr !== 'string') return '';
   const parts = dateStr.split('-');
   if (parts.length !== 3) return dateStr;
   
@@ -2346,13 +2459,16 @@ function setupFeedFilterListeners() {
 }
 
 // --- INITIALIZE APPLICATION ---
-function init() {
+async function init() {
   initInvokerFallback();
   initRouter();
   loadMLModel();
   
   // Auth systems
   setupAuthentication();
+
+  // Load server-side backend data
+  await loadServerData();
   
   // Populate registration avatar options offline
   const avatarOptions = document.querySelectorAll('.avatar-option img');

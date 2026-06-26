@@ -456,6 +456,7 @@
     <!-- Login Form -->
     <form id="auth-login-form" class="modal-form" novalidate>
       <div class="form-body">
+        <div id="login-error-banner" class="form-error-banner hidden"></div>
         <div class="form-field">
           <label for="login-email">Email Address</label>
           <input type="email" id="login-email" required placeholder="e.g. resident@civicpulse.org" autocomplete="email">
@@ -479,6 +480,7 @@
     <!-- Register Form -->
     <form id="auth-register-form" class="modal-form hidden" novalidate>
       <div class="form-body">
+        <div id="register-error-banner" class="form-error-banner hidden"></div>
         <div class="form-field">
           <label for="reg-name">Full Name</label>
           <input type="text" id="reg-name" required minlength="3" placeholder="e.g., Clara Jenkins" autocomplete="name">
@@ -725,6 +727,15 @@
         <!-- Default Single Image Frame -->
         <div class="detail-image-box" id="detail-img-box">
           <img src="" alt="Issue Photo" id="detail-image">
+        </div>
+
+        <!-- AI Resolution Verification Card -->
+        <div class="ai-verification-card" id="detail-ai-verification-card">
+          <h3>AI Resolution Verification</h3>
+          <p class="verification-desc">Authorities upload an <strong>after image</strong>; the system compares it against the original using visual difference analysis and a before/after slider.</p>
+          <div class="ai-verification-status-box" id="detail-ai-verification-status-box">
+            <!-- Dynamically populated status -->
+          </div>
         </div>
         
         <div class="detail-description-section">
