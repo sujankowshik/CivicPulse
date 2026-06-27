@@ -2484,4 +2484,84 @@ select:user-invalid + .error-msg {
   display: none !important;
 }
 
+/* Modern Responsive Media Queries overrides */
+@media (max-width: 768px) {
+  .app-header {
+    flex-direction: column;
+    gap: 1.25rem;
+    padding: 1.25rem 1rem;
+    align-items: stretch;
+  }
+  
+  .logo-area {
+    justify-content: center;
+  }
+  
+  .app-nav {
+    display: flex;
+    justify-content: center;
+    width: 100%;
+  }
+  
+  .app-nav ul {
+    flex-wrap: wrap;
+    justify-content: center;
+    width: 100%;
+    border-radius: 20px;
+    gap: 0.25rem;
+  }
+  
+  .header-actions {
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    width: 100%;
+  }
+
+  .user-header-panel {
+    width: 100%;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+
+  #main-content {
+    padding: 1.5rem 1rem;
+  }
+
+  .admin-form-fields-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-filters {
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+
+  .issue-cards-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .avatar-selection-grid {
+    grid-template-columns: repeat(auto-fit, minmax(50px, 1fr));
+    gap: 0.5rem;
+  }
+}
+
+@media (max-width: 600px) {
+  .detail-meta-row {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+
+  .profile-meta-row {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+  
+  .modal-dialog {
+    max-height: 95vh;
+  }
+}
+
 

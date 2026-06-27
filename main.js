@@ -422,6 +422,13 @@ class AppState {
   addIssue(issue) {
     issue.id = issue._id;
     this.issues.unshift(issue);
+    try {
+      const cachedIssuesList = this.issues.map(iss => {
+        const { photo, resolvedPhoto, ...lightIssue } = iss;
+        return lightIssue;
+      });
+      localStorage.setItem('civic_issues', JSON.stringify(cachedIssuesList));
+    } catch (e) {}
   }
 
   updateIssue(updated) {
@@ -430,6 +437,13 @@ class AppState {
     if (idx !== -1) {
       this.issues[idx] = updated;
     }
+    try {
+      const cachedIssuesList = this.issues.map(iss => {
+        const { photo, resolvedPhoto, ...lightIssue } = iss;
+        return lightIssue;
+      });
+      localStorage.setItem('civic_issues', JSON.stringify(cachedIssuesList));
+    } catch (e) {}
   }
 
   getIssueById(id) { return this.issues.find(i => i.id === id); }
@@ -506,6 +520,14 @@ function initRouter() {
     link.addEventListener('click', (e) => {
       const view = link.getAttribute('data-view');
       switchView(view);
+    });
+  });
+
+  // Dashboard "View All Feed" button trigger
+  document.querySelectorAll('.btn-view-feed').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const target = btn.getAttribute('data-target-view') || 'feed';
+      switchView(target);
     });
   });
 }
@@ -796,6 +818,33 @@ function initProfileTabs() {
 }
 
 async function loadServerData() {
+  // Load cached user data from localStorage instantly if available
+  const cachedUser = localStorage.getItem('civic_user');
+  if (cachedUser) {
+    try {
+      state.currentUser = JSON.parse(cachedUser);
+      state.userRole = state.currentUser.role;
+      syncSessionUI();
+    } catch (e) {
+      console.error("Error parsing cached user:", e);
+    }
+  }
+
+  // Load cached issues from localStorage instantly if available
+  const cachedIssues = localStorage.getItem('civic_issues');
+  if (cachedIssues) {
+    try {
+      state.issues = JSON.parse(cachedIssues);
+      // Render immediately with cached issues!
+      renderDashboard();
+      renderFeed();
+      renderMap();
+      renderAdminPanel();
+    } catch (e) {
+      console.error("Error parsing cached issues:", e);
+    }
+  }
+
   const token = localStorage.getItem('civic_jwt');
   if (token) {
     try {
@@ -814,10 +863,14 @@ async function loadServerData() {
           badges: user.badges
         };
         state.userRole = user.role;
+        localStorage.setItem('civic_user', JSON.stringify(state.currentUser));
+        syncSessionUI();
       } else {
         localStorage.removeItem('civic_jwt');
+        localStorage.removeItem('civic_user');
         state.currentUser = null;
         state.userRole = 'guest';
+        syncSessionUI();
       }
     } catch (e) {
       console.error("Failed to load user profile:", e);
@@ -825,6 +878,7 @@ async function loadServerData() {
   } else {
     state.currentUser = null;
     state.userRole = 'guest';
+    syncSessionUI();
   }
 
   try {
@@ -834,8 +888,28 @@ async function loadServerData() {
       state.issues = issues.map(iss => {
         iss.id = iss._id;
         iss.date = iss.createdAt ? iss.createdAt.split('T')[0] : new Date().toISOString().split('T')[0];
+        if (iss.upvotedUsers && state.currentUser && iss.upvotedUsers.includes(state.currentUser.email)) {
+          iss.hasUpvoted = true;
+        }
         return iss;
       });
+
+      // Cache the loaded issues list (stripping heavy Base64 image strings to avoid QuotaExceededError)
+      try {
+        const cachedIssuesList = state.issues.map(iss => {
+          const { photo, resolvedPhoto, ...lightIssue } = iss;
+          return lightIssue;
+        });
+        localStorage.setItem('civic_issues', JSON.stringify(cachedIssuesList));
+      } catch (e) {
+        console.error("Failed to write to civic_issues cache:", e);
+      }
+
+      // Update views when issues load successfully
+      renderDashboard();
+      renderFeed();
+      renderMap();
+      renderAdminPanel();
     }
   } catch (e) {
     console.error("Failed to load issues:", e);
@@ -1213,6 +1287,13 @@ function setupCommentsListener() {
     const token = localStorage.getItem('civic_jwt');
     if (!token) return;
 
+    // Set posting state
+    const submitBtn = commentForm.querySelector('button[type="submit"]');
+    const originalBtnText = submitBtn.textContent;
+    submitBtn.textContent = 'Posting...';
+    submitBtn.disabled = true;
+    textarea.disabled = true;
+
     fetch(`${API_URL_PREFIX}/api/issues/${state.selectedIssueId}/comments`, {
       method: 'POST',
       headers: {
@@ -1241,6 +1322,12 @@ function setupCommentsListener() {
     .catch((err) => {
       console.error(err);
       showToast('Connection error to server.', 'error');
+    })
+    .finally(() => {
+      // Restore form state
+      submitBtn.textContent = originalBtnText;
+      submitBtn.disabled = false;
+      textarea.disabled = false;
     });
   });
 }
@@ -2273,6 +2360,7 @@ function setupAuthentication() {
 
       if (res.ok) {
         localStorage.setItem('civic_jwt', data.token);
+        localStorage.setItem('civic_user', JSON.stringify(data.user));
 
         state.currentUser = data.user;
         state.userRole = data.user.role;
@@ -2351,6 +2439,7 @@ function setupAuthentication() {
 
       if (res.ok) {
         localStorage.setItem('civic_jwt', data.token);
+        localStorage.setItem('civic_user', JSON.stringify(data.user));
 
         state.currentUser = data.user;
         state.userRole = data.user.role;
@@ -2385,6 +2474,7 @@ function setupAuthentication() {
   // Sign out triggers
   document.getElementById('btn-sign-out').addEventListener('click', () => {
     localStorage.removeItem('civic_jwt');
+    localStorage.removeItem('civic_user');
     state.currentUser = null;
     state.userRole = 'guest';
     showToast('Signed out of session successfully.', 'success');
@@ -2468,7 +2558,7 @@ async function init() {
   setupAuthentication();
 
   // Load server-side backend data
-  await loadServerData();
+  loadServerData();
   
   // Populate registration avatar options offline
   const avatarOptions = document.querySelectorAll('.avatar-option img');
