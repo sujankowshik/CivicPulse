@@ -15,7 +15,7 @@ const generateToken = (userId) => {
 // @route   POST /api/auth/register
 // @desc    Register a new user
 router.post('/register', async (req, res) => {
-  const { name, email, password, avatar } = req.body;
+  const { name, email, password, avatar, aadhaarNumber } = req.body;
 
   try {
     let user = await User.findOne({ email });
@@ -23,14 +23,21 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ msg: 'User already exists' });
     }
 
+    // Format/Clean Aadhaar Number if provided
+    const cleanedAadhaar = aadhaarNumber ? String(aadhaarNumber).replace(/\s+/g, '') : '';
+    if (cleanedAadhaar && (cleanedAadhaar.length !== 12 || !/^\d{12}$/.test(cleanedAadhaar))) {
+      return res.status(400).json({ msg: 'Aadhaar number must be exactly 12 digits' });
+    }
+
     user = new User({
       name,
       email,
       password,
       avatar,
+      aadhaarNumber: cleanedAadhaar,
       role: 'citizen',
       karma: 0,
-      badges: []
+      badges: ['aadhaar-verified']
     });
 
     await user.save();
@@ -46,7 +53,8 @@ router.post('/register', async (req, res) => {
         role: user.role,
         avatar: user.avatar,
         karma: user.karma,
-        badges: user.badges
+        badges: user.badges,
+        aadhaarNumber: user.aadhaarNumber
       }
     });
   } catch (err) {
@@ -82,7 +90,8 @@ router.post('/login', async (req, res) => {
         role: user.role,
         avatar: user.avatar,
         karma: user.karma,
-        badges: user.badges
+        badges: user.badges,
+        aadhaarNumber: user.aadhaarNumber
       }
     });
   } catch (err) {

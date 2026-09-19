@@ -16,21 +16,19 @@ app.use(express.json({ limit: '10mb' })); // Support base64 image uploads
 
 // Request logging middleware
 app.use((req, res, next) => {
-  console.log(`[REQUEST] ${req.method} ${req.url} - Body:`, JSON.stringify(req.body));
-  
-  const oldJson = res.json;
-  res.json = function(data) {
-    console.log(`[RESPONSE] ${req.method} ${req.url} - Status: ${res.statusCode}`);
-    return oldJson.apply(res, arguments);
-  };
-  
-  const oldSend = res.send;
-  res.send = function(data) {
-    console.log(`[RESPONSE] ${req.method} ${req.url} - Status: ${res.statusCode} - Text:`, data);
-    return oldSend.apply(res, arguments);
-  };
-  
+  console.log(`[REQUEST] ${req.method} ${req.url}`);
   next();
+});
+
+// Root & Health check endpoints for Render
+app.get('/health', (req, res) => {
+  const dbStateMap = { 0: 'disconnected', 1: 'connected', 2: 'connecting', 3: 'disconnecting' };
+  const dbStatus = dbStateMap[mongoose.connection.readyState] || 'unknown';
+  res.status(200).json({ status: 'ok', uptime: process.uptime(), db: dbStatus });
+});
+
+app.get('/', (req, res) => {
+  res.send('CivicPulse Backend API is active');
 });
 
 // Routes
@@ -285,7 +283,7 @@ async function seedDatabase() {
       console.log('Default issues seeded successfully.');
     }
   } catch (err) {
-    console.error('Error seeding database:', err);
+    console.error('Error seeding database:', err.message);
   }
 }
 
@@ -346,15 +344,56 @@ function getMockAvatarSVG(seed) {
   return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
 }
 
-// Connect to MongoDB
-mongoose.connect(MONGO_URI)
-  .then(async () => {
+const HOST = process.env.HOST || (process.env.RENDER ? '0.0.0.0' : '127.0.0.1');
+
+// 1. Start HTTP Server FIRST so Render's health checks pass immediately
+const server = app.listen(PORT, HOST, () => {
+  console.log(`Express server is running on ${HOST}:${PORT}.`);
+});
+
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE' || err.code === 'EPERM') {
+    const fallbackPort = Number(PORT) + 10;
+    console.warn(`Port ${PORT} unavailable (${err.code}). Attempting fallback port ${fallbackPort}...`);
+    app.listen(fallbackPort, HOST, () => {
+      console.log(`Express server is running on fallback ${HOST}:${fallbackPort}.`);
+    });
+  } else {
+    console.error('Server error:', err.message);
+  }
+});
+
+// 2. Connect to MongoDB asynchronously without blocking server start or causing early exit
+async function connectDB() {
+  try {
+    console.log('Connecting to MongoDB...');
+    await mongoose.connect(MONGO_URI, {
+      serverSelectionTimeoutMS: 5000,
+    });
     console.log('MongoDB database connected successfully.');
     await seedDatabase();
-    app.listen(PORT, () => {
-      console.log(`Express server is running on port ${PORT}.`);
-    });
-  })
-  .catch((err) => {
-    console.error('Failed to connect to MongoDB:', err);
-  });
+  } catch (err) {
+    console.error('Failed to connect to MongoDB on startup:', err.message);
+    console.log('Express server remains active and listening. Database will retry on incoming requests or reconnects.');
+  }
+}
+
+connectDB();
+
+mongoose.connection.on('error', (err) => {
+  console.error('MongoDB connection error:', err.message);
+});
+
+mongoose.connection.on('disconnected', () => {
+  console.warn('MongoDB connection lost.');
+});
+
+// Process exception handlers to avoid unhandled crash exits
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception thrown:', err.message);
+});
+

@@ -36,9 +36,11 @@ const CATEGORIES = {
 };
 
 const STATUSES = {
-  pending: { label: 'Pending Verification', class: 'status-pending' },
+  pending: { label: 'Pending Review', class: 'status-pending' },
   progress: { label: 'In Progress', class: 'status-progress' },
-  resolved: { label: 'Resolved', class: 'status-resolved' }
+  resolved: { label: 'Awaiting Verification', class: 'status-awaiting' },
+  awaiting_verification: { label: 'Awaiting Verification', class: 'status-awaiting' },
+  closed: { label: 'Closed & Verified', class: 'status-closed' }
 };
 
 const BADGES = {
@@ -751,6 +753,16 @@ function renderProfile() {
   document.getElementById('profile-email').textContent = user.email;
   document.getElementById('profile-karma-score').textContent = user.karma;
 
+  const aadhaarValElem = document.getElementById('profile-aadhaar-val');
+  if (aadhaarValElem) {
+    if (user.aadhaarNumber && user.aadhaarNumber.length === 12) {
+      const masked = `XXXX XXXX ${user.aadhaarNumber.slice(-4)}`;
+      aadhaarValElem.textContent = `Verified (${masked})`;
+    } else {
+      aadhaarValElem.textContent = 'Verified Citizen Proof (Official ID)';
+    }
+  }
+
   // Render Badges
   const badgesGrid = document.getElementById('profile-badges-grid');
   badgesGrid.innerHTML = '';
@@ -1003,7 +1015,6 @@ function renderAdminPanel() {
   filtered.forEach(issue => {
     const cat = CATEGORIES[issue.category];
     const stat = STATUSES[issue.status];
-    const dept = issue.assignee === 'unassigned' ? 'Unassigned' : CATEGORIES[issue.assignee].label;
     
     const rowHTML = `
       <tr>
@@ -1012,15 +1023,63 @@ function renderAdminPanel() {
         <td><span class="badge ${cat.badge}">${cat.label}</span></td>
         <td><span class="priority-glow-badge priority-${issue.prioritySeverity}">${issue.priorityScore} (${issue.prioritySeverity.toUpperCase()})</span></td>
         <td><span class="status-indicator-tag ${stat.class}" style="position:static">${stat.label}</span></td>
-        <td><span class="admin-assignee-tag">${dept}</span></td>
         <td>
-          <button class="btn btn-secondary btn-sm" onclick="openDetailDialog('${issue.id}')">Manage</button>
+          <select class="admin-assignee-select" style="background: rgba(255,255,255,0.05); border: 1px solid var(--color-border); color: var(--color-text); font-size: 0.82rem; padding: 0.25rem 0.4rem; border-radius: 4px;" onchange="quickAssignDepartment('${issue.id}', this.value)">
+            <option value="unassigned" ${issue.assignee === 'unassigned' ? 'selected' : ''}>Unassigned</option>
+            <option value="roads" ${issue.assignee === 'roads' ? 'selected' : ''}>Roads & Transport</option>
+            <option value="waste" ${issue.assignee === 'waste' ? 'selected' : ''}>Sanitation & Waste</option>
+            <option value="lighting" ${issue.assignee === 'lighting' ? 'selected' : ''}>Municipal Electrical</option>
+            <option value="water" ${issue.assignee === 'water' ? 'selected' : ''}>Water & Sewerage</option>
+            <option value="parks" ${issue.assignee === 'parks' ? 'selected' : ''}>Parks & Recreation</option>
+          </select>
+        </td>
+        <td>
+          <button class="btn btn-secondary btn-sm" onclick="openDetailDialog('${issue.id}')">Manage Ticket</button>
         </td>
       </tr>
     `;
     tbody.insertAdjacentHTML('beforeend', rowHTML);
   });
 }
+
+window.quickAssignDepartment = async function(issueId, newAssignee) {
+  const token = localStorage.getItem('civic_jwt');
+  if (!token) {
+    showToast('Admin session required.', 'error');
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API_URL_PREFIX}/api/issues/${issueId}/status`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({ assignee: newAssignee })
+    });
+
+    if (res.ok) {
+      const updatedIssue = await res.json();
+      state.updateIssue(updatedIssue);
+      showToast(`Assigned ticket to ${newAssignee.toUpperCase()} Department! Upload option activated.`, 'success');
+      await loadServerData();
+      renderDashboard();
+      renderFeed();
+      renderMap();
+      renderAdminPanel();
+      if (newAssignee !== 'unassigned') {
+        openDetailDialog(issueId);
+      }
+    } else {
+      const data = await res.json();
+      showToast(data.msg || 'Failed to assign department.', 'error');
+    }
+  } catch (err) {
+    console.error(err);
+    showToast('Server connection error.', 'error');
+  }
+};
 
 function initAdminSortListeners() {
   document.querySelectorAll('.admin-data-table th[data-sort]').forEach(th => {
@@ -1078,7 +1137,7 @@ window.openDetailDialog = function(issueId) {
 
   const statusBox = document.getElementById('detail-ai-verification-status-box');
 
-  if (issue.status === 'resolved' && issue.resolvedPhoto) {
+  if ((issue.status === 'resolved' || issue.status === 'awaiting_verification' || issue.status === 'closed') && issue.resolvedPhoto) {
     slider.classList.remove('hidden');
     imgBox.classList.add('hidden');
     beforeImg.src = issue.photo || getMockImageSVG(issue.category);
@@ -1096,11 +1155,17 @@ window.openDetailDialog = function(issueId) {
       singleImg.src = '';
     }
     if (statusBox) {
-      if (issue.status === 'resolved') {
+      if (issue.status === 'closed') {
         statusBox.className = 'ai-verification-status-box success';
         statusBox.innerHTML = `
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-          <span>AI Verified: Resolution Confirmed (System Audit) ✓</span>
+          <span>Issue Closed & Verified by Citizen ✓</span>
+        `;
+      } else if (issue.status === 'awaiting_verification' || issue.status === 'resolved') {
+        statusBox.className = 'ai-verification-status-box success';
+        statusBox.innerHTML = `
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
+          <span>Resolution Submitted – Awaiting Citizen Verification</span>
         `;
       } else {
         statusBox.className = 'ai-verification-status-box pending';
@@ -1135,24 +1200,76 @@ window.openDetailDialog = function(issueId) {
     upvoteBtn.setAttribute('aria-pressed', 'false');
   }
 
+  // Citizen Resolution Verification Section
+  const citizenVerifyBox = document.getElementById('citizen-verification-box');
+  const resolutionNoteDisplay = document.getElementById('citizen-resolution-note-display');
+  const rejectionReasonContainer = document.getElementById('rejection-reason-container');
+  const rejectionNoteInput = document.getElementById('verification-rejection-note');
+
+  if (citizenVerifyBox) {
+    if ((issue.status === 'awaiting_verification' || issue.status === 'resolved') && state.userRole !== 'admin') {
+      citizenVerifyBox.classList.remove('hidden');
+
+      if (issue.resolutionNote && issue.resolutionNote.trim()) {
+        resolutionNoteDisplay.classList.remove('hidden');
+        resolutionNoteDisplay.innerHTML = `<strong>Admin Resolution Note:</strong> ${issue.resolutionNote}`;
+      } else {
+        resolutionNoteDisplay.classList.add('hidden');
+      }
+
+      if (rejectionReasonContainer) rejectionReasonContainer.classList.add('hidden');
+      if (rejectionNoteInput) rejectionNoteInput.value = '';
+
+      const btnVerify = document.getElementById('btn-verify-resolution');
+      if (btnVerify) {
+        btnVerify.onclick = async () => {
+          await submitCitizenVerification(issue.id || issue._id, 'verify', '');
+        };
+      }
+
+      const btnReject = document.getElementById('btn-reject-resolution');
+      if (btnReject) {
+        btnReject.onclick = async () => {
+          if (rejectionReasonContainer.classList.contains('hidden')) {
+            rejectionReasonContainer.classList.remove('hidden');
+            rejectionNoteInput.focus();
+            showToast('Please enter an optional reason for rejection and click "Issue Not Resolved" again to submit.', 'info');
+          } else {
+            const reason = rejectionNoteInput.value.trim();
+            await submitCitizenVerification(issue.id || issue._id, 'reject', reason);
+          }
+        };
+      }
+    } else {
+      citizenVerifyBox.classList.add('hidden');
+    }
+  }
+
   // Show/Hide Role Sections
   const adminBox = document.getElementById('admin-actions-box');
   const upvoteBox = document.getElementById('citizen-upvote-box');
   const selectStatus = document.getElementById('admin-status-select');
   const selectAssignee = document.getElementById('admin-assignee-select');
   
-  selectStatus.value = issue.status;
+  selectStatus.value = issue.status === 'resolved' ? 'awaiting_verification' : issue.status;
   selectAssignee.value = issue.assignee || 'unassigned';
 
-  // Trigger resolved photo upload form display if status resolved is pre-selected
-  toggleResolutionPhotoUploadField(issue.status);
+  const resNoteInput = document.getElementById('admin-resolution-note');
+  if (resNoteInput) resNoteInput.value = issue.resolutionNote || '';
+
+  // Trigger resolution photo upload form display immediately as soon as department is assigned or status is pre-selected
+  toggleResolutionPhotoUploadField(selectStatus.value, selectAssignee.value);
 
   if (state.userRole === 'admin') {
     adminBox.classList.remove('hidden');
     upvoteBox.classList.add('hidden');
   } else {
     adminBox.classList.add('hidden');
-    upvoteBox.classList.remove('hidden');
+    if (issue.status !== 'awaiting_verification') {
+      upvoteBox.classList.remove('hidden');
+    } else {
+      upvoteBox.classList.add('hidden');
+    }
   }
 
   renderTimeline(issue);
@@ -1161,9 +1278,11 @@ window.openDetailDialog = function(issueId) {
   dialog.showModal();
 };
 
-function toggleResolutionPhotoUploadField(status) {
+function toggleResolutionPhotoUploadField(status, assignee) {
   const field = document.getElementById('admin-resolution-photo-field');
-  if (status === 'resolved') {
+  if (!field) return;
+  // Show upload option immediately as soon as a department is assigned or when status is resolved/awaiting
+  if ((assignee && assignee !== 'unassigned') || status === 'resolved' || status === 'awaiting_verification') {
     field.classList.remove('hidden');
   } else {
     field.classList.add('hidden');
@@ -1399,53 +1518,77 @@ function setupAdminPhotoUpload() {
   const previewImg = document.getElementById('admin-preview-img');
   const prompt = document.getElementById('admin-upload-prompt');
   const removeBtn = document.getElementById('btn-remove-admin-photo');
+  const sampleBtn = document.getElementById('btn-sample-admin-photo');
 
-  dropZone.addEventListener('click', (e) => {
-    if (e.target.closest('#btn-remove-admin-photo')) return;
-    if (e.target === fileInput) return;
-    fileInput.click();
-  });
+  if (fileInput) {
+    fileInput.addEventListener('click', (e) => {
+      e.stopPropagation();
+    });
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files.length > 0) {
+        readAdminImage(fileInput.files[0]);
+      }
+    });
+  }
 
-  dropZone.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    dropZone.classList.add('dragover');
-  });
+  if (dropZone) {
+    dropZone.addEventListener('click', (e) => {
+      if (e.target.closest('#btn-remove-admin-photo') || e.target.closest('#btn-sample-admin-photo')) return;
+      if (e.target === fileInput) return;
+      if (fileInput) fileInput.click();
+    });
 
-  dropZone.addEventListener('dragleave', () => {
-    dropZone.classList.remove('dragover');
-  });
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('dragover');
+    });
 
-  dropZone.addEventListener('drop', (e) => {
-    e.preventDefault();
-    dropZone.classList.remove('dragover');
-    if (e.dataTransfer.files.length > 0) {
-      readAdminImage(e.dataTransfer.files[0]);
-    }
-  });
+    dropZone.addEventListener('dragleave', () => {
+      dropZone.classList.remove('dragover');
+    });
 
-  fileInput.addEventListener('change', () => {
-    if (fileInput.files.length > 0) {
-      readAdminImage(fileInput.files[0]);
-    }
-  });
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      if (e.dataTransfer.files.length > 0) {
+        readAdminImage(e.dataTransfer.files[0]);
+      }
+    });
+  }
 
-  removeBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    adminPhotoData = null;
-    fileInput.value = '';
-    previewImg.src = '';
-    previewContainer.classList.add('hidden');
-    prompt.classList.remove('hidden');
-  });
+  if (removeBtn) {
+    removeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      adminPhotoData = null;
+      if (fileInput) fileInput.value = '';
+      if (previewImg) previewImg.src = '';
+      if (previewContainer) previewContainer.classList.add('hidden');
+      if (prompt) prompt.classList.remove('hidden');
+    });
+  }
+
+  if (sampleBtn) {
+    sampleBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const issue = state.selectedIssueId ? state.getIssueById(state.selectedIssueId) : null;
+      const cat = issue ? issue.category : 'roads';
+      adminPhotoData = getMockImageSVG(cat, true);
+      if (previewImg) previewImg.src = adminPhotoData;
+      if (previewContainer) previewContainer.classList.remove('hidden');
+      if (prompt) prompt.classList.add('hidden');
+      showToast('Sample resolution proof photo generated!', 'info');
+    });
+  }
 
   function readAdminImage(file) {
-    if (!file.type.startsWith('image/')) return;
+    if (!file || !file.type.startsWith('image/')) return;
     const reader = new FileReader();
     reader.onload = (e) => {
       adminPhotoData = e.target.result;
-      previewImg.src = adminPhotoData;
-      previewContainer.classList.remove('hidden');
-      prompt.classList.add('hidden');
+      if (previewImg) previewImg.src = adminPhotoData;
+      if (previewContainer) previewContainer.classList.remove('hidden');
+      if (prompt) prompt.classList.add('hidden');
     };
     reader.readAsDataURL(file);
   }
@@ -1466,7 +1609,11 @@ function setupAdminActionsListener() {
   const updateStatusBtn = document.getElementById('btn-update-status');
 
   selectStatus.addEventListener('change', (e) => {
-    toggleResolutionPhotoUploadField(e.target.value);
+    toggleResolutionPhotoUploadField(e.target.value, selectAssignee.value);
+  });
+
+  selectAssignee.addEventListener('change', (e) => {
+    toggleResolutionPhotoUploadField(selectStatus.value, e.target.value);
   });
 
   updateStatusBtn.addEventListener('click', () => {
@@ -1474,12 +1621,18 @@ function setupAdminActionsListener() {
     const issue = state.getIssueById(state.selectedIssueId);
     if (!issue) return;
 
-    const newStatus = selectStatus.value;
+    let newStatus = selectStatus.value;
     const newAssignee = selectAssignee.value;
+    const resNoteInput = document.getElementById('admin-resolution-note');
+    const resNote = resNoteInput ? resNoteInput.value.trim() : '';
 
-    if (newStatus === 'resolved' && !adminPhotoData) {
-      showToast('Please upload a resolved state photo proof.', 'error');
-      return;
+    // If admin uploaded a resolution photo or selected awaiting_verification / resolved
+    if (adminPhotoData || (newStatus === 'resolved' || newStatus === 'awaiting_verification')) {
+      if (!adminPhotoData && !issue.resolvedPhoto) {
+        showToast('A resolution proof photo is required to submit resolution.', 'error');
+        return;
+      }
+      newStatus = 'awaiting_verification';
     }
 
     const token = localStorage.getItem('civic_jwt');
@@ -1494,15 +1647,20 @@ function setupAdminActionsListener() {
       body: JSON.stringify({
         status: newStatus,
         assignee: newAssignee,
-        resolvedPhoto: newStatus === 'resolved' ? adminPhotoData : undefined
+        resolvedPhoto: adminPhotoData || issue.resolvedPhoto,
+        resolutionNote: resNote
       })
     })
     .then(async (res) => {
+      const data = await res.json();
       if (res.ok) {
-        const updatedIssue = await res.json();
-        state.updateIssue(updatedIssue);
+        state.updateIssue(data);
 
-        showToast('Operations ticket updated successfully.', 'success');
+        const toastMsg = (data.status === 'awaiting_verification')
+          ? 'Resolution uploaded! Ticket marked as Awaiting Citizen Verification.'
+          : 'Operations ticket updated successfully.';
+
+        showToast(toastMsg, 'success');
         resetAdminPhotoUpload();
         document.getElementById('detail-dialog').close();
         
@@ -1513,7 +1671,7 @@ function setupAdminActionsListener() {
         renderMap();
         renderAdminPanel();
       } else {
-        showToast('Failed to update operations ticket.', 'error');
+        showToast(data.msg || 'Failed to update operations ticket.', 'error');
       }
     })
     .catch((err) => {
@@ -1521,6 +1679,49 @@ function setupAdminActionsListener() {
       showToast('Connection error to server.', 'error');
     });
   });
+}
+
+async function submitCitizenVerification(issueId, action, feedbackNote) {
+  const token = localStorage.getItem('civic_jwt');
+  if (!token) {
+    showToast('Please sign in to verify or reopen issues.', 'error');
+    document.getElementById('auth-dialog').showModal();
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API_URL_PREFIX}/api/issues/${issueId}/verify`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({ action, feedbackNote })
+    });
+
+    const data = await res.json();
+    if (res.ok) {
+      if (action === 'verify') {
+        showToast('Resolution verified! Issue officially closed.', 'success');
+        await awardKarma(25, 'Verified ticket resolution');
+      } else {
+        showToast('Issue returned to In Progress for municipal field team.', 'info');
+      }
+
+      document.getElementById('detail-dialog').close();
+      await loadServerData();
+
+      renderDashboard();
+      renderFeed();
+      renderMap();
+      renderAdminPanel();
+    } else {
+      showToast(data.msg || 'Failed to submit verification.', 'error');
+    }
+  } catch (err) {
+    console.error(err);
+    showToast('Connection error to server.', 'error');
+  }
 }
 
 // --- 7. SMART AI SEVERITY TRIAGE ENGINE ---
@@ -2172,11 +2373,14 @@ async function auditResolutionVisuals(issue) {
 }
 
 
+let bypassDuplicateCheck = false;
+
 function setupReportSubmission() {
   const form = document.getElementById('report-issue-form');
   const dialog = document.getElementById('report-dialog');
+  const warningBox = document.getElementById('ai-duplicate-warning');
 
-  form.addEventListener('submit', (e) => {
+  form.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!state.currentUser) {
       showToast('Session expired. Please sign in to submit reports.', 'error');
@@ -2212,6 +2416,8 @@ function setupReportSubmission() {
       }
     });
 
+    if (hasErrors) return;
+
     const title = document.getElementById('issue-title').value.trim();
     const category = document.getElementById('issue-category').value;
     const description = document.getElementById('issue-description').value.trim();
@@ -2219,6 +2425,64 @@ function setupReportSubmission() {
 
     const token = localStorage.getItem('civic_jwt');
     if (!token) return;
+
+    // Perform Duplicate Check if not already bypassed
+    if (!bypassDuplicateCheck) {
+      try {
+        const dupRes = await fetch(`${API_URL_PREFIX}/api/issues/check-duplicate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ category, coordX, coordY, title })
+        });
+        const dupData = await dupRes.json();
+
+        if (dupData.isDuplicate && dupData.existingIssue) {
+          const ex = dupData.existingIssue;
+          warningBox.classList.remove('hidden');
+          warningBox.innerHTML = `
+            <div class="duplicate-alert-header">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              <span>This issue has already been reported at this location.</span>
+            </div>
+            <div class="duplicate-preview-card">
+              <div class="duplicate-preview-title">${ex.title}</div>
+              <div class="duplicate-preview-meta">
+                <span>Category: <strong>${CATEGORIES[ex.category] ? CATEGORIES[ex.category].label : ex.category}</strong></span>
+                <span>Supports: <strong>${ex.upvotes}</strong></span>
+                <span>Status: <strong>${STATUSES[ex.status] ? STATUSES[ex.status].label : ex.status}</strong></span>
+              </div>
+            </div>
+            <div class="duplicate-actions-row">
+              <button type="button" id="btn-support-duplicate" class="btn btn-primary btn-sm">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="margin-right:4px;"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
+                Confirm & Support Existing Issue (+1 Support)
+              </button>
+              <button type="button" id="btn-ignore-duplicate" class="btn btn-secondary btn-sm">
+                Create Separate New Report
+              </button>
+            </div>
+          `;
+
+          document.getElementById('btn-support-duplicate').onclick = async () => {
+            await supportExistingIssue(ex._id || ex.id);
+          };
+
+          document.getElementById('btn-ignore-duplicate').onclick = () => {
+            warningBox.classList.add('hidden');
+            bypassDuplicateCheck = true;
+            form.requestSubmit();
+          };
+
+          showToast('A similar issue exists nearby. You can support it or report a new one.', 'info');
+          return;
+        }
+      } catch (err) {
+        console.error('Duplicate check error:', err);
+      }
+    }
+
+    // Reset flag for future submissions
+    bypassDuplicateCheck = false;
 
     fetch(`${API_URL_PREFIX}/api/issues`, {
       method: 'POST',
@@ -2401,6 +2665,8 @@ function setupAuthentication() {
     const name = document.getElementById('reg-name').value.trim();
     const email = document.getElementById('reg-email').value.trim();
     const pass = document.getElementById('reg-password').value;
+    const aadhaarInp = document.getElementById('reg-aadhaar');
+    const aadhaarVal = aadhaarInp ? aadhaarInp.value.trim().replace(/\s+/g, '') : '';
     
     const avatarChecked = regForm.querySelector('input[name="reg-avatar"]:checked');
     const avatarVal = avatarChecked ? avatarChecked.value : 'avatar-1';
@@ -2416,6 +2682,13 @@ function setupAuthentication() {
       }
     });
 
+    if (aadhaarInp && (aadhaarVal.length !== 12 || !/^\d{12}$/.test(aadhaarVal))) {
+      const f = aadhaarInp.closest('.form-field');
+      if (f) f.classList.add('has-error');
+      hasError = true;
+      showToast('Aadhaar number must be exactly 12 numeric digits as citizen proof', 'error');
+    }
+
     if (hasError) return;
 
     let avatarUrl = getMockAvatarSVG('Felix');
@@ -2427,7 +2700,7 @@ function setupAuthentication() {
     fetch(`${API_URL_PREFIX}/api/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, email, password: pass, avatar: avatarUrl })
+      body: JSON.stringify({ name, email, password: pass, avatar: avatarUrl, aadhaarNumber: aadhaarVal })
     })
     .then(async (res) => {
       let data;

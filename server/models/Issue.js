@@ -32,7 +32,7 @@ const IssueSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'progress', 'resolved'],
+    enum: ['pending', 'progress', 'resolved', 'awaiting_verification', 'closed'],
     default: 'pending'
   },
   photo: {
@@ -42,6 +42,19 @@ const IssueSchema = new mongoose.Schema({
   resolvedPhoto: {
     type: String,
     default: ''
+  },
+  resolutionNote: {
+    type: String,
+    default: ''
+  },
+  resolvedAt: {
+    type: Date
+  },
+  verificationDetails: {
+    verifiedBy: { type: String, default: '' },
+    verifiedAt: { type: Date },
+    status: { type: String, default: '' },
+    feedbackNote: { type: String, default: '' }
   },
   coordX: {
     type: Number,

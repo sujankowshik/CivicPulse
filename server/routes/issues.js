@@ -48,6 +48,52 @@ function runAIEngineTriage(title, description, category) {
   return { score: finalScore, severity: severity };
 }
 
+// @route   POST /api/issues/check-duplicate
+// @desc    Check if a similar issue exists within geographic radius
+router.post('/check-duplicate', async (req, res) => {
+  const { category, coordX, coordY, title } = req.body;
+  
+  try {
+    const targetX = parseFloat(coordX);
+    const targetY = parseFloat(coordY);
+
+    if (isNaN(targetX) || isNaN(targetY) || !category) {
+      return res.json({ isDuplicate: false, existingIssue: null });
+    }
+
+    // Find active non-closed issues matching same category
+    const activeIssues = await Issue.find({
+      category,
+      status: { $nin: ['closed'] }
+    });
+
+    let duplicateMatch = null;
+    let minDistance = Infinity;
+
+    for (const issue of activeIssues) {
+      const dist = Math.sqrt(Math.pow(issue.coordX - targetX, 2) + Math.pow(issue.coordY - targetY, 2));
+      // Radius threshold: <= 50 coordinate units
+      if (dist <= 50 && dist < minDistance) {
+        minDistance = dist;
+        duplicateMatch = issue;
+      }
+    }
+
+    if (duplicateMatch) {
+      return res.json({
+        isDuplicate: true,
+        distance: Math.round(minDistance),
+        existingIssue: duplicateMatch
+      });
+    }
+
+    res.json({ isDuplicate: false, existingIssue: null });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send('Server error checking duplicates');
+  }
+});
+
 // @route   GET /api/issues
 // @desc    Get all issues
 router.get('/', async (req, res) => {
@@ -73,7 +119,6 @@ router.post('/', auth, async (req, res) => {
     }
 
     const triage = runAIEngineTriage(title, description, category);
-    const dateStr = new Date().toISOString().split('T')[0];
 
     const newIssue = new Issue({
       title,
@@ -119,6 +164,44 @@ router.post('/', auth, async (req, res) => {
     await user.save();
 
     res.json(issue);
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send('Server error');
+  }
+});
+
+// @route   POST /api/issues/:id/support
+// @desc    Support/Confirm an existing issue instead of creating duplicate
+router.post('/:id/support', auth, async (req, res) => {
+  try {
+    const issue = await Issue.findById(req.params.id);
+    if (!issue) {
+      return res.status(404).json({ msg: 'Issue not found' });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ msg: 'User not found' });
+    }
+
+    const email = user.email;
+    if (issue.upvotedUsers.includes(email)) {
+      return res.status(400).json({ msg: 'You have already reported/supported this existing issue.' });
+    }
+
+    issue.upvotedUsers.push(email);
+    issue.upvotes += 1;
+    issue.priorityScore = Math.min(100, issue.priorityScore + 5);
+
+    user.karma += 10;
+    if (!user.badges.includes('civic-supporter')) {
+      user.badges.push('civic-supporter');
+    }
+
+    await issue.save();
+    await user.save();
+
+    res.json({ msg: 'Supported existing issue successfully!', issue });
   } catch (err) {
     console.error(err.message);
     res.status(500).send('Server error');
@@ -218,7 +301,7 @@ router.post('/:id/comments', auth, async (req, res) => {
 // @route   PUT /api/issues/:id/status
 // @desc    Update status & assignee of an issue (Admin operations)
 router.put('/:id/status', auth, async (req, res) => {
-  const { status, assignee, resolvedPhoto } = req.body;
+  const { status, assignee, resolvedPhoto, resolutionNote } = req.body;
 
   try {
     const issue = await Issue.findById(req.params.id);
@@ -231,45 +314,162 @@ router.put('/:id/status', auth, async (req, res) => {
       return res.status(403).json({ msg: 'Authorization denied: Admin role required' });
     }
 
-    const oldStatus = issue.status;
-    const oldAssignee = issue.assignee;
-
-    if (status !== undefined) issue.status = status;
-    if (assignee !== undefined) issue.assignee = assignee;
-    if (resolvedPhoto !== undefined) issue.resolvedPhoto = resolvedPhoto;
-
-    // Build timeline milestones dynamically
-    if (assignee !== undefined && assignee !== oldAssignee) {
-      issue.timeline.push({
-        status: issue.status,
-        title: 'Assigned Operations',
-        note: `Department assignee updated to ${assignee.toUpperCase()}`,
-        date: getFormattedDate()
+    // MANDATORY VALIDATION: Admin CANNOT directly close an issue!
+    if (status === 'closed') {
+      return res.status(400).json({
+        msg: 'Admin cannot directly close an issue. Citizen verification is required before closing.'
       });
     }
 
-    if (status !== undefined && status !== oldStatus) {
-      let title = 'Status Updated';
-      let note = `Ticket marked as ${status.toUpperCase()}`;
-
-      if (status === 'progress') {
-        title = 'Investigation Dispatched';
-        note = 'Municipal inspection team dispatched to coordinates.';
-      } else if (status === 'resolved') {
-        title = 'Resolution Complete';
-        note = 'Proof photo uploaded. Resolution verified.';
+    // MANDATORY VALIDATION: Resolution photo required for marking as resolved/awaiting verification
+    if (status === 'resolved' || status === 'awaiting_verification') {
+      const finalResolvedPhoto = resolvedPhoto || issue.resolvedPhoto;
+      if (!finalResolvedPhoto || finalResolvedPhoto.trim() === '') {
+        return res.status(400).json({
+          msg: 'Resolution proof photo is required to mark an issue as resolved.'
+        });
       }
 
+      issue.status = 'awaiting_verification'; // Status becomes RESOLVED_AWAITING_VERIFICATION
+      issue.resolvedPhoto = finalResolvedPhoto;
+      if (resolutionNote !== undefined) issue.resolutionNote = resolutionNote;
+      issue.resolvedAt = new Date();
+
       issue.timeline.push({
-        status,
-        title,
-        note,
+        status: 'awaiting_verification',
+        title: 'Resolution Submitted (Awaiting Citizen Verification)',
+        note: resolutionNote ? `Admin Note: ${resolutionNote}` : 'Proof photo uploaded by municipal operator. Awaiting citizen verification.',
         date: getFormattedDate()
       });
+    } else if (status !== undefined) {
+      const oldStatus = issue.status;
+      issue.status = status;
+      if (status !== oldStatus) {
+        let title = 'Status Updated';
+        let note = `Ticket marked as ${status.toUpperCase()}`;
+        if (status === 'progress') {
+          title = 'Investigation Dispatched';
+          note = 'Municipal inspection team dispatched to coordinates.';
+        }
+        issue.timeline.push({
+          status,
+          title,
+          note,
+          date: getFormattedDate()
+        });
+      }
+    }
+
+    if (assignee !== undefined) {
+      const oldAssignee = issue.assignee;
+      issue.assignee = assignee;
+      if (assignee !== oldAssignee) {
+        issue.timeline.push({
+          status: issue.status,
+          title: 'Assigned Operations',
+          note: `Department assignee updated to ${assignee.toUpperCase()}`,
+          date: getFormattedDate()
+        });
+      }
     }
 
     await issue.save();
     res.json(issue);
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send('Server error');
+  }
+});
+
+// @route   POST /api/issues/:id/verify
+// @desc    Citizen verification of admin resolution (Verify -> CLOSED, Reject -> IN_PROGRESS)
+router.post('/:id/verify', auth, async (req, res) => {
+  const { action, feedbackNote } = req.body;
+
+  try {
+    const issue = await Issue.findById(req.params.id);
+    if (!issue) {
+      return res.status(404).json({ msg: 'Issue not found' });
+    }
+
+    if (issue.status !== 'awaiting_verification' && issue.status !== 'resolved') {
+      return res.status(400).json({ msg: 'This issue is not currently awaiting verification.' });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ msg: 'User not found' });
+    }
+
+    if (action === 'verify') {
+      issue.status = 'closed';
+      issue.verificationDetails = {
+        verifiedBy: user.email,
+        verifiedAt: new Date(),
+        status: 'verified',
+        feedbackNote: feedbackNote || 'Resolution verified by citizen'
+      };
+
+      issue.timeline.push({
+        status: 'closed',
+        title: 'Citizen Verified & Closed',
+        note: `Citizen confirmed issue resolution. ${feedbackNote ? 'Feedback: ' + feedbackNote : 'Ticket officially closed.'}`,
+        date: getFormattedDate()
+      });
+
+      // Award Karma to citizen for verifying (+25)
+      user.karma += 25;
+      await user.save();
+    } else if (action === 'reject') {
+      issue.status = 'progress';
+      issue.verificationDetails = {
+        verifiedBy: user.email,
+        verifiedAt: new Date(),
+        status: 'rejected',
+        feedbackNote: feedbackNote || 'Issue not properly resolved'
+      };
+
+      issue.timeline.push({
+        status: 'progress',
+        title: 'Resolution Rejected by Citizen',
+        note: `Verification failed. Returned to In Progress. ${feedbackNote ? 'Reason: ' + feedbackNote : ''}`,
+        date: getFormattedDate()
+      });
+
+      // Add rejection comment
+      issue.comments.push({
+        author: `${user.name} (Citizen Verification)`,
+        role: 'citizen',
+        text: `❌ Resolution Rejected: ${feedbackNote || 'Issue is not adequately resolved. Please reinvestigate.'}`,
+        date: getFormattedTime()
+      });
+    } else {
+      return res.status(400).json({ msg: 'Invalid verification action. Must be "verify" or "reject".' });
+    }
+
+    await issue.save();
+    res.json(issue);
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send('Server error');
+  }
+});
+
+// @route   DELETE /api/issues/:id
+// @desc    Delete issue (Strictly restricted to Admin role - Citizens forbidden)
+router.delete('/:id', auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user || user.role !== 'admin') {
+      return res.status(403).json({ msg: 'Access Denied: Citizens are not permitted to delete reported civic issues.' });
+    }
+
+    const issue = await Issue.findByIdAndDelete(req.params.id);
+    if (!issue) {
+      return res.status(404).json({ msg: 'Issue not found' });
+    }
+
+    res.json({ msg: 'Issue deleted by administrator', id: req.params.id });
   } catch (err) {
     console.error(err.message);
     res.status(500).send('Server error');

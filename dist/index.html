@@ -13,8 +13,8 @@
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.0/dist/mobilenet.min.js"></script>
   <!-- Stylesheets -->
   <!-- Scripts -->
-  <script type="module" crossorigin src="/assets/index-BLj2oUXe.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/index-CUUvG2Vc.css">
+  <script type="module" crossorigin src="/assets/index-COq2d8Xj.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-DSlD5m9Z.css">
 </head>
 <body>
   <!-- Navigation Header -->
@@ -192,7 +192,8 @@
               <option value="all">All Statuses</option>
               <option value="pending">Pending Review</option>
               <option value="progress">In Progress</option>
-              <option value="resolved">Resolved</option>
+              <option value="awaiting_verification">Awaiting Verification</option>
+              <option value="closed">Closed & Verified</option>
             </select>
           </div>
           <div class="filter-group">
@@ -321,6 +322,12 @@
             </div>
             <h2 id="profile-name">User Fullname</h2>
             <p id="profile-email">user@email.com</p>
+            <div id="profile-aadhaar-box" class="aadhaar-badge-box">
+              <span class="aadhaar-verified-badge">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>
+                Citizen Aadhaar Proof: <strong id="profile-aadhaar-val">Verified</strong>
+              </span>
+            </div>
             <div class="profile-meta-row">
               <div class="p-meta-item">
                 <span class="p-meta-val" id="profile-joined">June 2026</span>
@@ -405,7 +412,8 @@
             <option value="all">All Statuses</option>
             <option value="pending">Pending Verification</option>
             <option value="progress">In Progress</option>
-            <option value="resolved">Resolved</option>
+            <option value="awaiting_verification">Awaiting Citizen Verification</option>
+            <option value="closed">Closed & Verified</option>
           </select>
 
           <select id="admin-filter-priority">
@@ -492,6 +500,12 @@
           <label for="reg-password">Password</label>
           <input type="password" id="reg-password" required minlength="6" placeholder="Min 6 characters" autocomplete="new-password">
           <div class="error-msg"><span aria-hidden="true">❌</span> Password must be at least 6 characters.</div>
+        </div>
+        
+        <div class="form-field">
+          <label for="reg-aadhaar">Aadhaar Number (Citizen ID Proof)</label>
+          <input type="text" id="reg-aadhaar" required pattern="[0-9\s]{12,14}" maxlength="14" placeholder="12-Digit Aadhaar (e.g. 5482 9102 3847)" autocomplete="off">
+          <div class="error-msg" id="aadhaar-error-msg"><span aria-hidden="true">❌</span> Valid 12-digit Aadhaar number is required as citizen proof.</div>
         </div>
         
         <!-- Avatar Selector -->
@@ -766,6 +780,34 @@
           <p class="upvote-helper-text">Upvote this issue if you are experiencing it. High upvote counts raise priority for city planners.</p>
         </div>
 
+        <!-- Citizen Verification Action Section (When Status is Awaiting Verification) -->
+        <div id="citizen-verification-box" class="citizen-verification-box hidden">
+          <div class="verification-header-row">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" class="verification-icon"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+            <h3>Admin Resolution Submitted – Citizen Verification Required</h3>
+          </div>
+          <p class="verification-desc-text">
+            Municipal operations uploaded a resolution proof photo. Please inspect the proof and verify whether the issue has been successfully resolved.
+          </p>
+          <div id="citizen-resolution-note-display" class="resolution-note-display hidden"></div>
+          
+          <div class="rejection-input-group hidden" id="rejection-reason-container">
+            <label for="verification-rejection-note">Reason for Rejection (Optional comment)</label>
+            <input type="text" id="verification-rejection-note" placeholder="e.g., The pothole is only partially filled...">
+          </div>
+
+          <div class="verification-actions-grid">
+            <button type="button" id="btn-verify-resolution" class="btn btn-success btn-verify-action">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+              Verify Resolution (Close Issue)
+            </button>
+            <button type="button" id="btn-reject-resolution" class="btn btn-danger btn-reject-action">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              Issue Not Resolved (Reopen)
+            </button>
+          </div>
+        </div>
+
         <!-- Admin Control Section -->
         <div id="admin-actions-box" class="admin-actions-box hidden">
           <h3>Admin Operations</h3>
@@ -775,7 +817,7 @@
               <select id="admin-status-select">
                 <option value="pending">Pending Verification</option>
                 <option value="progress">In Progress</option>
-                <option value="resolved">Resolved</option>
+                <option value="awaiting_verification">Mark Resolved (Awaiting Citizen Verification)</option>
               </select>
             </div>
             
@@ -791,14 +833,14 @@
               </select>
             </div>
             
-            <!-- Resolution Proof Photo (Visible when status is changed to Resolved) -->
+            <!-- Resolution Proof Photo (Visible when status is changed to Resolved/Awaiting Verification) -->
             <div class="admin-form-group span-cols hidden" id="admin-resolution-photo-field">
-              <label for="admin-resolved-photo">Resolution Proof Photo (Drag/Drop or Select)</label>
+              <label for="admin-resolved-photo">Resolution Proof Photo (Required to Mark Resolved)</label>
               <div class="drag-drop-zone admin-drop-zone" id="admin-photo-upload-zone">
                 <input type="file" id="admin-photo-input" accept="image/*" class="hidden-file-input">
                 <div class="drop-zone-prompt" id="admin-upload-prompt">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20" class="upload-icon"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                  <p class="prompt-text">Add verification photo (resolved state) <span>browse</span></p>
+                  <p class="prompt-text">Upload verification photo (resolved state) <span>browse</span></p>
                 </div>
                 <div class="drop-zone-preview hidden" id="admin-preview-container">
                   <img src="" alt="Resolved Proof Preview" id="admin-preview-img">
@@ -807,6 +849,16 @@
                   </button>
                 </div>
               </div>
+              
+              <div class="sample-photo-helper" style="margin-top: 0.4rem; text-align: right;">
+                <button type="button" id="btn-sample-admin-photo" class="btn btn-secondary btn-sm" style="padding: 0.25rem 0.6rem; font-size: 0.78rem;">
+                  ⚡ Auto-Generate Sample Resolution Photo
+                </button>
+              </div>
+
+              <!-- Resolution Note Input -->
+              <label for="admin-resolution-note" style="margin-top: 0.75rem;">Resolution Notes (Optional)</label>
+              <textarea id="admin-resolution-note" rows="2" placeholder="Details of work completed by field operations team..."></textarea>
             </div>
 
             <button id="btn-update-status" class="btn btn-primary span-cols">Submit Status Operations</button>

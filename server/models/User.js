@@ -34,6 +34,11 @@ const UserSchema = new mongoose.Schema({
   badges: {
     type: [String],
     default: []
+  },
+  aadhaarNumber: {
+    type: String,
+    trim: true,
+    default: ''
   }
 }, { timestamps: true });
 
